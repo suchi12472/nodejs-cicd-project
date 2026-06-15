@@ -1,0 +1,95 @@
+pipeline {
+    agent any
+
+    environment {
+        AWS_REGION      = 'ap-south-1'
+        ECR_REGISTRY    = '568035148283.dkr.ecr.ap-south-1.amazonaws.com'
+        ECR_REPO        = 'nodejs-cicd-app'
+        IMAGE_TAG       = "v${BUILD_NUMBER}"
+        APP_SERVER_IP   = '13.234.32.209'
+    }
+
+    stages {
+
+        stage('Clone Code') {
+            steps {
+                git branch: 'main',
+                    url: 'https://github.com/suchi12472/nodejs-cicd-project.git'
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            steps {
+                withSonarQubeEnv('SonarQube') {
+                    sh '''
+                        sonar-scanner \
+                        -Dsonar.projectKey=nodejs-cicd-project \
+                        -Dsonar.sources=.
+                    '''
+                }
+            }
+        }
+
+        stage('Docker Build') {
+            steps {
+                sh "docker build -t ${ECR_REPO}:${IMAGE_TAG} ."
+            }
+        }
+
+        stage('Push to ECR') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'aws-ecr-credentials',
+                    usernameVariable: 'AWS_ACCESS_KEY_ID',
+                    passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                )]) {
+                    sh """
+                        aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
+                        aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
+                        aws configure set region ${AWS_REGION}
+
+                        aws ecr get-login-password --region ${AWS_REGION} | \
+                        docker login --username AWS \
+                        --password-stdin ${ECR_REGISTRY}
+
+                        docker tag ${ECR_REPO}:${IMAGE_TAG} ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}
+                        docker push ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}
+                    """
+                }
+            }
+        }
+
+        stage('Deploy to App Server') {
+            steps {
+                sshagent(['app-server-ssh']) {
+                    sh """
+                        ssh -o StrictHostKeyChecking=no ubuntu@${APP_SERVER_IP} '
+                            aws ecr get-login-password --region ${AWS_REGION} | \
+                            docker login --username AWS \
+                            --password-stdin ${ECR_REGISTRY}
+
+                            docker pull ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}
+
+                            docker stop nodejs-app || true
+                            docker rm nodejs-app || true
+
+                            docker run -d \
+                                --name nodejs-app \
+                                -p 3000:3000 \
+                                ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}
+                        '
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo '✅ Pipeline completed! App deployed successfully.'
+        }
+        failure {
+            echo '❌ Pipeline failed. Check the logs above.'
+        }
+    }
+}
