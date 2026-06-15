@@ -19,17 +19,18 @@ pipeline {
         }
 
         stage('SonarQube Analysis') {
-            steps {
-                withSonarQubeEnv('SonarQube') {
-                    sh '''
-                        sonar-scanner \
-                        -Dsonar.projectKey=nodejs-cicd-project \
-                        -Dsonar.sources=.
-                    '''
-                }
+    steps {
+        withSonarQubeEnv('SonarQube') {
+            withEnv(["PATH+SONAR=/opt/sonar-scanner/bin"]) {
+                sh '''
+                    sonar-scanner \
+                    -Dsonar.projectKey=nodejs-cicd-project \
+                    -Dsonar.sources=.
+                '''
             }
         }
-
+    }
+}
         stage('Docker Build') {
             steps {
                 sh "docker build -t ${ECR_REPO}:${IMAGE_TAG} ."
